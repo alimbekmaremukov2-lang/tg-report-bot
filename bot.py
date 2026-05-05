@@ -172,7 +172,7 @@ async def send_daily_report(bot: Bot):
 
 # ─── Запуск ───────────────────────────────────────────────────
 def main():
-    app = Application.builder().token(TELEGRAM_TOKEN).build()
+   app = Application.builder().token(TELEGRAM_TOKEN).arbitrary_callback_data(False).build()
 
     app.add_handler(CommandHandler("start",  cmd_start))
     app.add_handler(CommandHandler("report", cmd_report))
