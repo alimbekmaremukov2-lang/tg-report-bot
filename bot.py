@@ -30,17 +30,16 @@ if not SPREADSHEET_ID:
  
 MOSCOW_TZ = pytz.timezone("Europe/Moscow")
  
-# Точные столбцы (0-based индексы) где находятся значения в строке 5
-# A=0, B=1, C=2, D=3, E=4, F=5, G=6, H=7, I=8, J=9, K=10, L=11, M=12, N=13, O=14, P=15
+# Точные столбцы (0-based) где находятся значения в строке 5
 FIELDS = [
     {"name": "Количество обработанного товара", "col": 0},
     {"name": "ЗП НА ЕД ТОВАРА",                "col": 2},
     {"name": "Сумма обработанного товара",      "col": 3},
     {"name": "Кол-во коробок",                  "col": 5},
-    {"name": "Сумма за хранение товара",         "col": 7},
-    {"name": "Сумма заработной платы",           "col": 9},
+    {"name": "Сумма за хранение товара",        "col": 7},
+    {"name": "Сумма заработной платы",          "col": 9},
     {"name": "Общая выручка",                   "col": 11},
-    {"name": "Траты на сегодняшний день",        "col": 13},
+    {"name": "Траты на сегодняшний день",       "col": 13},
     {"name": "Маржа",                           "col": 14},
     {"name": "Продуктивность команды",          "col": 15},
 ]
@@ -55,46 +54,12 @@ def get_gclient():
     return gspread.authorize(creds)
  
  
-def get_notes_from_sheet(spreadsheet, sheet_name):
-    """Читает все примечания через Sheets API напрямую"""
-    try:
-        sheet_id = None
-        for s in spreadsheet.worksheets():
-            if s.title == sheet_name:
-                sheet_id = s.id
-                break
-        if sheet_id is None:
-            return {}
- 
-        url = (
-            f"https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet.id}"
-            f"?ranges={sheet_name}&fields=sheets(data(rowData(values(note))))"
-            f"&includeGridData=true"
-        )
-        resp = spreadsheet.client.request("GET", url)
-        data = resp.json()
-        notes = {}
-        rows = data["sheets"][0]["data"][0].get("rowData", [])
-        for r_idx, row in enumerate(rows):
-            for c_idx, cell in enumerate(row.get("values", [])):
-                note = cell.get("note", "").strip()
-                if note:
-                    notes[(r_idx + 1, c_idx + 1)] = note
-        return notes
-    except Exception as e:
-        logger.error(f"Ошибка чтения примечаний: {e}")
-        return {}
- 
- 
 def get_today_report():
     today = datetime.now(MOSCOW_TZ)
     try:
         gc = get_gclient()
-        spreadsheet = gc.open_by_key(SPREADSHEET_ID)
-        sheet = spreadsheet.worksheet(SHEET_NAME)
+        sheet = gc.open_by_key(SPREADSHEET_ID).worksheet(SHEET_NAME)
         all_values = sheet.get_all_values()
-        notes = get_notes_from_sheet(spreadsheet, SHEET_NAME)
-        logger.info(f"Found notes at: {list(notes.keys())}")
  
         # Дата — строка 3 (индекс 2)
         date_val = ""
@@ -108,7 +73,11 @@ def get_today_report():
         # Значения — строка 5 (индекс 4)
         row5 = all_values[4] if len(all_values) > 4 else []
  
-        # Список товара — строки 9-11 (индексы 8-10)
+        # Детализация из Q5 (индекс 16) и R5 (индекс 17)
+        sum_detail = row5[16].strip() if len(row5) > 16 else ""
+        prod_detail = row5[17].strip() if len(row5) > 17 else ""
+ 
+        # Список товара — строки 9-12 (индексы 8-11)
         goods_rows = []
         for r in all_values[8:12]:
             name = r[0].strip() if len(r) > 0 else ""
@@ -121,22 +90,6 @@ def get_today_report():
         for r in all_values[13:23]:
             if len(r) > 4 and r[4].strip():
                 client_rows.append(r)
- 
-        # Примечания
-        sum_note = ""
-        for r in [5, 6, 7]:
-            for c in [4, 5, 3]:
-                sum_note = get_note(sheet, r, c)
-                if sum_note:
-                    break
-            if sum_note:
-                break
- 
-        prod_note = get_note(sheet, 5, 16)  # P5 = столбец 16 (1-based)
-        if not prod_note:
-            prod_note = get_note(sheet, 6, 16)
-        if not prod_note:
-            prod_note = get_note(sheet, 7, 16)
  
     except Exception as e:
         logger.error(f"Ошибка чтения таблицы: {e}")
@@ -164,18 +117,18 @@ def get_today_report():
             for gname, gqty in goods_rows:
                 lines.append(f"• {gname}: {gqty}")
  
-        # После суммы обработанного — примечание
-        if col == 3 and sum_note:
-            for note_line in sum_note.split("\n"):
-                if note_line.strip():
-                    lines.append(f"_{note_line.strip()}_")
+        # После суммы обработанного — детализация из Q5
+        if col == 3 and sum_detail:
+            for line in sum_detail.split("\n"):
+                if line.strip():
+                    lines.append(f"_{line.strip()}_")
  
-        # После продуктивности — примечание
-        if col == 15 and prod_note:
+        # После продуктивности — детализация из R5
+        if col == 15 and prod_detail:
             lines.append("──────────────────────")
-            for note_line in prod_note.split("\n"):
-                if note_line.strip():
-                    lines.append(note_line.strip())
+            for line in prod_detail.split("\n"):
+                if line.strip():
+                    lines.append(line.strip())
  
     # Доставка
     if client_rows:
