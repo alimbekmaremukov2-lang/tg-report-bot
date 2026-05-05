@@ -97,11 +97,14 @@ def get_today_report():
                 client_rows.append(r)
  
         # Примечания
-        sum_note = get_note(sheet, 5, 4)   # D5 = столбец 4 (1-based)
-        if not sum_note:
-            sum_note = get_note(sheet, 6, 4)
-        if not sum_note:
-            sum_note = get_note(sheet, 5, 3)
+        sum_note = ""
+        for r in [5, 6, 7]:
+            for c in [4, 5, 3]:
+                sum_note = get_note(sheet, r, c)
+                if sum_note:
+                    break
+            if sum_note:
+                break
  
         prod_note = get_note(sheet, 5, 16)  # P5 = столбец 16 (1-based)
         if not prod_note:
@@ -228,4 +231,4 @@ def main():
  
  
 if __name__ == "__main__":
-    main(
+    main()
