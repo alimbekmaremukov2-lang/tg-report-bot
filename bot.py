@@ -55,20 +55,46 @@ def get_gclient():
     return gspread.authorize(creds)
  
  
-def get_note(sheet, row, col):
+def get_notes_from_sheet(spreadsheet, sheet_name):
+    """Читает все примечания через Sheets API напрямую"""
     try:
-        cell = sheet.cell(row, col)
-        return cell.note.strip() if cell.note else ""
-    except Exception:
-        return ""
+        sheet_id = None
+        for s in spreadsheet.worksheets():
+            if s.title == sheet_name:
+                sheet_id = s.id
+                break
+        if sheet_id is None:
+            return {}
+ 
+        url = (
+            f"https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet.id}"
+            f"?ranges={sheet_name}&fields=sheets(data(rowData(values(note))))"
+            f"&includeGridData=true"
+        )
+        resp = spreadsheet.client.request("GET", url)
+        data = resp.json()
+        notes = {}
+        rows = data["sheets"][0]["data"][0].get("rowData", [])
+        for r_idx, row in enumerate(rows):
+            for c_idx, cell in enumerate(row.get("values", [])):
+                note = cell.get("note", "").strip()
+                if note:
+                    notes[(r_idx + 1, c_idx + 1)] = note
+        return notes
+    except Exception as e:
+        logger.error(f"Ошибка чтения примечаний: {e}")
+        return {}
  
  
 def get_today_report():
     today = datetime.now(MOSCOW_TZ)
     try:
         gc = get_gclient()
-        sheet = gc.open_by_key(SPREADSHEET_ID).worksheet(SHEET_NAME)
+        spreadsheet = gc.open_by_key(SPREADSHEET_ID)
+        sheet = spreadsheet.worksheet(SHEET_NAME)
         all_values = sheet.get_all_values()
+        notes = get_notes_from_sheet(spreadsheet, SHEET_NAME)
+        logger.info(f"Found notes at: {list(notes.keys())}")
  
         # Дата — строка 3 (индекс 2)
         date_val = ""
