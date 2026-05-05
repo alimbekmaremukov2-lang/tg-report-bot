@@ -16,12 +16,15 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ─── Настройки ───────────────────────────────────────────────
-TELEGRAM_TOKEN   = os.environ["TELEGRAM_TOKEN"]       # токен бота
-GROUP_CHAT_ID    = os.environ["GROUP_CHAT_ID"]         # ID группы (отрицательное число)
-SPREADSHEET_ID   = os.environ["SPREADSHEET_ID"]        # ID Google-таблицы
-SHEET_NAME       = os.environ.get("SHEET_NAME", "Лист1")  # имя листа
-REPORT_HOUR      = int(os.environ.get("REPORT_HOUR", "12"))   # час отправки (МСК)
-REPORT_MINUTE    = int(os.environ.get("REPORT_MINUTE", "0"))  # минута отправки
+TELEGRAM_TOKEN   = os.getenv("TELEGRAM_TOKEN", "")
+GROUP_CHAT_ID    = os.getenv("GROUP_CHAT_ID", "")
+SPREADSHEET_ID   = os.getenv("SPREADSHEET_ID", "")
+SHEET_NAME       = os.getenv("SHEET_NAME", "Лист1")
+REPORT_HOUR      = int(os.getenv("REPORT_HOUR", "12"))
+REPORT_MINUTE    = int(os.getenv("REPORT_MINUTE", "0"))
+
+if not TELEGRAM_TOKEN:
+    raise RuntimeError("TELEGRAM_TOKEN is not set!")
 
 MOSCOW_TZ = pytz.timezone("Europe/Moscow")
 
