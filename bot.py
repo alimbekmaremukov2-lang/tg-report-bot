@@ -31,37 +31,45 @@ if not SPREADSHEET_ID:
 MOSCOW_TZ = pytz.timezone("Europe/Moscow")
  
  
-def get_client():
-    creds_json = os.getenv("GOOGLE_CREDENTIALS_JSON", "")
-    creds_data = json.loads(creds_json)
-    scopes = [
+def get_gclient():
+    creds_data = json.loads(os.getenv("GOOGLE_CREDENTIALS_JSON", ""))
+    creds = Credentials.from_service_account_info(creds_data, scopes=[
         "https://spreadsheets.google.com/feeds",
         "https://www.googleapis.com/auth/drive",
-    ]
-    creds = Credentials.from_service_account_info(creds_data, scopes=scopes)
+    ])
     return gspread.authorize(creds)
+ 
+ 
+def get_note(sheet, row, col):
+    try:
+        cell = sheet.cell(row, col)
+        return cell.note.strip() if cell.note else ""
+    except Exception:
+        return ""
  
  
 def get_today_report():
     today = datetime.now(MOSCOW_TZ)
     try:
-        gc = get_client()
-        spreadsheet = gc.open_by_key(SPREADSHEET_ID)
-        sheet = spreadsheet.worksheet(SHEET_NAME)
+        gc = get_gclient()
+        sheet = gc.open_by_key(SPREADSHEET_ID).worksheet(SHEET_NAME)
         all_values = sheet.get_all_values()
  
         # Строка 3 (индекс 2) — дата
-        date_val = all_values[2][6] if len(all_values) > 2 and len(all_values[2]) > 6 else ""
+        date_val = ""
+        for cell in all_values[2]:
+            if cell.strip():
+                date_val = cell.strip()
+                break
         if not date_val:
             date_val = today.strftime("%d.%m.%Y")
  
         # Строка 4 (индекс 3) — заголовки
         headers = all_values[3] if len(all_values) > 3 else []
- 
-        # Строка 5 (индекс 4) — значения (объединённые ячейки начинаются с row 5)
+        # Строка 5 (индекс 4) — значения
         values = all_values[4] if len(all_values) > 4 else []
  
-        # Список товара — строки 9-10 (индексы 8-9)
+        # Список товара строки 9-10 (индексы 8-9)
         goods_rows = []
         for r in all_values[8:12]:
             name = r[0].strip() if len(r) > 0 else ""
@@ -69,46 +77,35 @@ def get_today_report():
             if name and name not in ("Список товара", "кол-во", ""):
                 goods_rows.append((name, qty))
  
-        # Клиенты — строки 14+ (индекс 13+), столбцы E-K (4-10)
+        # Клиенты строки 14-23 (индексы 13-22), столбцы E-K (4-10)
         client_rows = []
-        for r in all_values[13:]:
+        for r in all_values[13:23]:
             if len(r) > 4 and r[4].strip():
                 client_rows.append(r)
  
-        # Примечание к ячейке P5 (продуктивность по сотрудникам)
-        productivity_note = ""
-        try:
-            cell = sheet.cell(5, 16)  # строка 5, столбец P=16
-            if cell.note:
-                productivity_note = cell.note.strip()
-        except Exception:
-            pass
-        # Если не в P5, попробуем P6 и P7
-        if not productivity_note:
-            for row_num in [6, 7]:
-                try:
-                    cell = sheet.cell(row_num, 16)
-                    if cell.note:
-                        productivity_note = cell.note.strip()
-                        break
-                except Exception:
-                    pass
+        # Примечание к "Сумма обработанного товара" — C5
+        sum_note = get_note(sheet, 5, 3)
+ 
+        # Примечание к "Продуктивность команды" — P5/P6/P7
+        prod_note = get_note(sheet, 5, 16)
+        if not prod_note:
+            prod_note = get_note(sheet, 6, 16)
+        if not prod_note:
+            prod_note = get_note(sheet, 7, 16)
  
     except Exception as e:
         logger.error(f"Ошибка чтения таблицы: {e}")
         return f"Ошибка при чтении таблицы: {e}"
+ 
+    skip_names = {"Список товара", "кол-во", "Клиент", "Кол-во", "Склад",
+                  "Кол-во коробок", "Траты", "Выручка", "Маржа", "Доставка",
+                  "Прочие траты", "Зарплаты", "Остаток"}
  
     lines = [
         "📊 *Ежедневный отчёт*",
         f"📅 {date_val}",
         "──────────────────────",
     ]
- 
-    # Маппинг столбцов: индекс → название
-    # A=0, B=1(ЗП), C=2(Сумма обраб), D=3(Кол короб), E=4(Сумма хран),
-    # F=5(ЗП сумма), G=6(Выручка), не знаю L,N,O,P точно — берём все непустые
-    skip_names = {"Список товара", "кол-во", "Клиент", "Кол-во", "Склад",
-                  "Кол-во коробок", "Траты", "Выручка", "Маржа"}
  
     for i, h in enumerate(headers):
         h = h.strip()
@@ -121,16 +118,22 @@ def get_today_report():
         lines.append(f"\n*{h}*")
         lines.append(v)
  
-        # После кол-ва товара (индекс 0) — вставляем список товара
+        # После кол-ва товара — список товара
         if i == 0 and goods_rows:
             lines.append("📋 *Список товара:*")
             for name, qty in goods_rows:
                 lines.append(f"• {name}: {qty}")
  
-        # После продуктивности (последний столбец) — примечание
-        if "родуктивност" in h and productivity_note:
+        # После суммы обработанного товара — примечание
+        if "умма обработан" in h and sum_note:
+            for note_line in sum_note.split("\n"):
+                if note_line.strip():
+                    lines.append(f"_{note_line.strip()}_")
+ 
+        # После продуктивности — примечание
+        if "родуктивност" in h and prod_note:
             lines.append("──────────────────────")
-            for note_line in productivity_note.split("\n"):
+            for note_line in prod_note.split("\n"):
                 if note_line.strip():
                     lines.append(note_line.strip())
  
@@ -198,19 +201,14 @@ async def send_daily_report(context: ContextTypes.DEFAULT_TYPE):
  
 def main():
     app = Application.builder().token(TELEGRAM_TOKEN).build()
- 
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("report", cmd_report))
     app.add_handler(CommandHandler("chatid", cmd_chatid))
  
-    job_queue = app.job_queue
-    job_queue.run_daily(
+    app.job_queue.run_daily(
         send_daily_report,
         time=datetime.now(MOSCOW_TZ).replace(
-            hour=REPORT_HOUR,
-            minute=REPORT_MINUTE,
-            second=0,
-            microsecond=0
+            hour=REPORT_HOUR, minute=REPORT_MINUTE, second=0, microsecond=0
         ).timetz(),
     )
  
