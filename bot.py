@@ -4,9 +4,8 @@ from datetime import datetime
 import pytz
 import gspread
 from google.oauth2.service_account import Credentials
-from telegram import Bot, Update
+from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
 import json
 
 logging.basicConfig(
@@ -32,7 +31,7 @@ if not SPREADSHEET_ID:
 MOSCOW_TZ = pytz.timezone("Europe/Moscow")
 
 
-def get_sheet():
+def get_client():
     creds_json = os.getenv("GOOGLE_CREDENTIALS_JSON", "")
     creds_data = json.loads(creds_json)
     scopes = [
@@ -40,116 +39,142 @@ def get_sheet():
         "https://www.googleapis.com/auth/drive",
     ]
     creds = Credentials.from_service_account_info(creds_data, scopes=scopes)
-    client = gspread.authorize(creds)
-    return client.open_by_key(SPREADSHEET_ID).worksheet(SHEET_NAME)
+    return gspread.authorize(creds)
 
 
 def get_today_report():
     today = datetime.now(MOSCOW_TZ)
-
     try:
-        sheet = get_sheet()
+        client = get_client()
+        spreadsheet = client.open_by_key(SPREADSHEET_ID)
+        sheet = spreadsheet.worksheet(SHEET_NAME)
         all_values = sheet.get_all_values()
 
+        # Строка 3 — дата
         date_row = all_values[2] if len(all_values) > 2 else []
+        # Строка 4 — заголовки (A4:P4)
         headers = all_values[3] if len(all_values) > 3 else []
+        # Строка 6 — значения (A6:P6)
         values = all_values[5] if len(all_values) > 5 else []
-        goods_rows = [r for r in all_values[8:] if any(r)]
-        client_rows = [r for r in all_values[13:] if len(r) > 4 and any(r[4:])]
+        # Строки 9-10 — список товара
+        goods_rows = [r for r in all_values[8:12] if r[0].strip() and r[0].strip() not in ("Список товара",)]
+        # Строки 14+ — клиенты
+        client_rows = [r for r in all_values[13:] if len(r) > 4 and r[4].strip()]
+
+        # Читаем примечание к ячейке P6 (продуктивность по сотрудникам)
+        productivity_note = ""
+        try:
+            cell = sheet.cell(6, 16)  # строка 6, столбец P (16)
+            if cell.note:
+                productivity_note = cell.note.strip()
+        except Exception:
+            pass
 
     except Exception as e:
         logger.error(f"Ошибка чтения таблицы: {e}")
         return f"Ошибка при чтении таблицы: {e}"
 
     date_display = date_row[0] if date_row else today.strftime("%d.%m.%Y")
+
     lines = [
-        f"📊 *Ежедневный отчёт*",
-        f"📅 *{date_display}*",
-        "",
+        "📊 *Ежедневный отчёт*",
+        f"📅 {date_display}",
+        "──────────────────────",
     ]
 
-    EMOJI = ["📦", "💰", "📫", "🗃️", "💵", "🏦", "📈", "💸", "📉", "⚡"]
+    # Заголовки и значения — столбцы A-P (индексы 0-15)
+    # Специальный порядок: после кол-ва товара (A) вставляем список товара
     for i, (h, v) in enumerate(zip(headers, values)):
-        if h and v:
-            em = EMOJI[i] if i < len(EMOJI) else "▪️"
-            lines.append(f"{em} *{h}:* {v}")
+        if not h.strip() or not v.strip():
+            continue
 
-    if goods_rows:
-        lines.append("")
-        lines.append("📋 *Список товара:*")
-        for row in goods_rows:
-            name = row[0] if len(row) > 0 else ""
-            qty = row[1] if len(row) > 1 else ""
-            if name:
-                lines.append(f"  • {name}: {qty}")
+        lines.append(f"\n*{h.strip()}*")
+        lines.append(v.strip())
 
-    filled_clients = [r for r in client_rows if len(r) > 4 and r[4]]
-    if filled_clients:
-        lines.append("")
-        lines.append("🧾 *По клиентам:*")
-        for row in filled_clients:
+        # После "Кол-во обработанного товара" (столбец A, индекс 0) — список товара
+        if i == 0 and goods_rows:
+            lines.append("📋 *Список товара:*")
+            for row in goods_rows:
+                name = row[0].strip() if len(row) > 0 else ""
+                qty = row[1].strip() if len(row) > 1 else ""
+                if name:
+                    lines.append(f"• {name}: {qty}")
+
+        # После "Продуктивность команды" (последний столбец P, индекс 15) — примечание
+        if i == 15 and productivity_note:
+            lines.append("──────────────────────")
+            for note_line in productivity_note.split("\n"):
+                if note_line.strip():
+                    lines.append(note_line.strip())
+
+    # Доставка
+    if client_rows:
+        lines.append("\n──────────────────────")
+        lines.append("🚚 *Доставка:*")
+        for row in client_rows:
             try:
-                client = row[4] if len(row) > 4 else ""
-                qty = row[5] if len(row) > 5 else ""
-                storage = row[6] if len(row) > 6 else ""
-                boxes = row[7] if len(row) > 7 else ""
-                costs = row[8] if len(row) > 8 else ""
-                revenue = row[9] if len(row) > 9 else ""
-                margin = row[10] if len(row) > 10 else ""
-                parts = [f"*{client}*"]
+                client_name = row[4].strip() if len(row) > 4 else ""
+                qty = row[5].strip() if len(row) > 5 else ""
+                storage = row[6].strip() if len(row) > 6 else ""
+                boxes = row[7].strip() if len(row) > 7 else ""
+                costs = row[8].strip() if len(row) > 8 else ""
+                revenue = row[9].strip() if len(row) > 9 else ""
+                margin = row[10].strip() if len(row) > 10 else ""
+                if not client_name:
+                    continue
+                parts = [f"*{client_name}*"]
                 if qty:
-                    parts.append(f"кол-во: {qty}")
+                    parts.append(f"{qty} шт")
                 if storage:
-                    parts.append(f"склад: {storage}")
+                    parts.append(storage)
                 if boxes:
-                    parts.append(f"коробок: {boxes}")
+                    parts.append(f"{boxes} кор")
                 if costs:
-                    parts.append(f"траты: {costs}")
+                    parts.append(f"{costs} р")
                 if revenue:
-                    parts.append(f"выручка: {revenue}")
+                    parts.append(revenue)
                 if margin:
-                    parts.append(f"маржа: {margin}")
-                lines.append("  " + " | ".join(parts))
+                    parts.append(margin)
+                lines.append(" | ".join(parts))
             except Exception:
                 continue
 
-    lines.append("")
-    lines.append(f"🕐 Отправлено в {today.strftime('%H:%M')} МСК")
+    lines.append("\n──────────────────────")
+    lines.append(f"🕐 {today.strftime('%H:%M')} МСК")
     return "\n".join(lines)
 
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "👋 Бот ежедневных отчётов запущен!\n"
-        "Команды:\n"
+        "Бот ежедневных отчётов запущен!\n"
         "/report — отчёт прямо сейчас\n"
         "/chatid — узнать ID этого чата"
     )
 
 
 async def cmd_report(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("⏳ Загружаю данные из таблицы...")
+    await update.message.reply_text("Загружаю данные...")
     text = get_today_report()
     await update.message.reply_text(text, parse_mode="Markdown")
 
 
 async def cmd_chatid(update: Update, context: ContextTypes.DEFAULT_TYPE):
     cid = update.effective_chat.id
-    await update.message.reply_text(f"Chat ID этого чата: `{cid}`", parse_mode="Markdown")
+    await update.message.reply_text(f"Chat ID: `{cid}`", parse_mode="Markdown")
 
 
-async def send_daily_report(bot: Bot):
+async def send_daily_report(context: ContextTypes.DEFAULT_TYPE):
     logger.info("Отправляю ежедневный отчёт...")
     try:
         text = get_today_report()
-        await bot.send_message(
+        await context.bot.send_message(
             chat_id=GROUP_CHAT_ID,
             text=text,
             parse_mode="Markdown"
         )
-        logger.info("Отчёт успешно отправлен.")
+        logger.info("Отчёт отправлен.")
     except Exception as e:
-        logger.error(f"Ошибка отправки отчёта: {e}")
+        logger.error(f"Ошибка: {e}")
 
 
 def main():
@@ -159,17 +184,18 @@ def main():
     app.add_handler(CommandHandler("report", cmd_report))
     app.add_handler(CommandHandler("chatid", cmd_chatid))
 
-    scheduler = AsyncIOScheduler(timezone=MOSCOW_TZ)
-    scheduler.add_job(
+    job_queue = app.job_queue
+    job_queue.run_daily(
         send_daily_report,
-        trigger="cron",
-        hour=REPORT_HOUR,
-        minute=REPORT_MINUTE,
-        args=[app.bot],
+        time=datetime.now(MOSCOW_TZ).replace(
+            hour=REPORT_HOUR,
+            minute=REPORT_MINUTE,
+            second=0,
+            microsecond=0
+        ).timetz(),
     )
-    scheduler.start()
-    logger.info(f"Бот запущен! Расписание: {REPORT_HOUR:02d}:{REPORT_MINUTE:02d} МСК")
 
+    logger.info(f"Бот запущен! Отчёт в {REPORT_HOUR:02d}:{REPORT_MINUTE:02d} МСК")
     app.run_polling(drop_pending_updates=True)
 
 
