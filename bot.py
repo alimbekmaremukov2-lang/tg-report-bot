@@ -30,6 +30,21 @@ if not SPREADSHEET_ID:
  
 MOSCOW_TZ = pytz.timezone("Europe/Moscow")
  
+# Точные столбцы (0-based индексы) где находятся значения в строке 5
+# A=0, B=1, C=2, D=3, E=4, F=5, G=6, H=7, I=8, J=9, K=10, L=11, M=12, N=13, O=14, P=15
+FIELDS = [
+    {"name": "Количество обработанного товара", "col": 0},
+    {"name": "ЗП НА ЕД ТОВАРА",                "col": 2},
+    {"name": "Сумма обработанного товара",      "col": 3},
+    {"name": "Кол-во коробок",                  "col": 5},
+    {"name": "Сумма за хранение товара",         "col": 7},
+    {"name": "Сумма заработной платы",           "col": 9},
+    {"name": "Общая выручка",                   "col": 11},
+    {"name": "Траты на сегодняшний день",        "col": 13},
+    {"name": "Маржа",                           "col": 14},
+    {"name": "Продуктивность команды",          "col": 15},
+]
+ 
  
 def get_gclient():
     creds_data = json.loads(os.getenv("GOOGLE_CREDENTIALS_JSON", ""))
@@ -55,7 +70,7 @@ def get_today_report():
         sheet = gc.open_by_key(SPREADSHEET_ID).worksheet(SHEET_NAME)
         all_values = sheet.get_all_values()
  
-        # Строка 3 (индекс 2) — дата
+        # Дата — строка 3 (индекс 2)
         date_val = ""
         for cell in all_values[2]:
             if cell.strip():
@@ -64,12 +79,10 @@ def get_today_report():
         if not date_val:
             date_val = today.strftime("%d.%m.%Y")
  
-        # Строка 4 (индекс 3) — заголовки
-        headers = all_values[3] if len(all_values) > 3 else []
-        # Строка 5 (индекс 4) — значения
-        values = all_values[4] if len(all_values) > 4 else []
+        # Значения — строка 5 (индекс 4)
+        row5 = all_values[4] if len(all_values) > 4 else []
  
-        # Список товара строки 9-10 (индексы 8-9)
+        # Список товара — строки 9-11 (индексы 8-10)
         goods_rows = []
         for r in all_values[8:12]:
             name = r[0].strip() if len(r) > 0 else ""
@@ -77,17 +90,20 @@ def get_today_report():
             if name and name not in ("Список товара", "кол-во", ""):
                 goods_rows.append((name, qty))
  
-        # Клиенты строки 14-23 (индексы 13-22), столбцы E-K (4-10)
+        # Клиенты — строки 14-23 (индексы 13-22)
         client_rows = []
         for r in all_values[13:23]:
             if len(r) > 4 and r[4].strip():
                 client_rows.append(r)
  
-        # Примечание к "Сумма обработанного товара" — C5
-        sum_note = get_note(sheet, 5, 3)
+        # Примечания
+        sum_note = get_note(sheet, 5, 4)   # D5 = столбец 4 (1-based)
+        if not sum_note:
+            sum_note = get_note(sheet, 6, 4)
+        if not sum_note:
+            sum_note = get_note(sheet, 5, 3)
  
-        # Примечание к "Продуктивность команды" — P5/P6/P7
-        prod_note = get_note(sheet, 5, 16)
+        prod_note = get_note(sheet, 5, 16)  # P5 = столбец 16 (1-based)
         if not prod_note:
             prod_note = get_note(sheet, 6, 16)
         if not prod_note:
@@ -97,41 +113,36 @@ def get_today_report():
         logger.error(f"Ошибка чтения таблицы: {e}")
         return f"Ошибка при чтении таблицы: {e}"
  
-    skip_names = {"Список товара", "кол-во", "Клиент", "Кол-во", "Склад",
-                  "Кол-во коробок", "Траты", "Выручка", "Маржа", "Доставка",
-                  "Прочие траты", "Зарплаты", "Остаток"}
- 
     lines = [
         "📊 *Ежедневный отчёт*",
         f"📅 {date_val}",
         "──────────────────────",
     ]
  
-    for i, h in enumerate(headers):
-        h = h.strip()
-        if not h or h in skip_names:
-            continue
-        v = values[i].strip() if i < len(values) else ""
+    for field in FIELDS:
+        name = field["name"]
+        col = field["col"]
+        v = row5[col].strip() if col < len(row5) else ""
         if not v:
             continue
  
-        lines.append(f"\n*{h}*")
+        lines.append(f"\n*{name}*")
         lines.append(v)
  
         # После кол-ва товара — список товара
-        if i == 0 and goods_rows:
+        if col == 0 and goods_rows:
             lines.append("📋 *Список товара:*")
-            for name, qty in goods_rows:
-                lines.append(f"• {name}: {qty}")
+            for gname, gqty in goods_rows:
+                lines.append(f"• {gname}: {gqty}")
  
-        # После суммы обработанного товара — примечание
-        if "умма обработан" in h and sum_note:
+        # После суммы обработанного — примечание
+        if col == 3 and sum_note:
             for note_line in sum_note.split("\n"):
                 if note_line.strip():
                     lines.append(f"_{note_line.strip()}_")
  
         # После продуктивности — примечание
-        if "родуктивност" in h and prod_note:
+        if col == 15 and prod_note:
             lines.append("──────────────────────")
             for note_line in prod_note.split("\n"):
                 if note_line.strip():
@@ -217,4 +228,4 @@ def main():
  
  
 if __name__ == "__main__":
-    main()
+    main(
